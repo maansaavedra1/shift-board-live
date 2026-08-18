@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # Shift Board backend
+  shift-board:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      SPROUT_BASE: ${SPROUT_BASE:-https://gateway-sb.sprout.ph}
+      SPROUT_CLIENT_ID: ${SPROUT_CLIENT_ID}
+      SPROUT_CLIENT_SECRET: ${SPROUT_CLIENT_SECRET}
+      SPROUT_SUBSCRIPTION_KEY: ${SPROUT_SUBSCRIPTION_KEY}
+      SPROUT_USER_ID: ${SPROUT_USER_ID}
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: shift-board
+      KEYCLOAK_CLIENT_ID: shift-board-app
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-}
+      REQUIRED_ROLE: ${REQUIRED_ROLE:-admin}
+    depends_on:
+      - keycloak
+    restart: unless-stopped
+
+  # Local Keycloak instance — for testing this whole setup end-to-end
+  # WITHOUT needing a real production Keycloak yet. Not meant for production
+  # use as configured here (uses the built-in dev database, admin/admin
+  # credentials) — a real deployment would point KEYCLOAK_URL at whatever
+  # Keycloak instance the client actually runs (or a properly configured
+  # production Keycloak of your own).
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: start-dev
+    ports:
+      - "8080:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    restart: unless-stopped
