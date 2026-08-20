@@ -12,6 +12,17 @@
       "redirectUris": ["*"],
       "webOrigins": ["*"],
       "protocol": "openid-connect"
+    },
+    {
+      "clientId": "shift-board-admin-api",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "CHANGE_ME_LOCAL_TESTING_ONLY",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocol": "openid-connect",
+      "description": "Used only by scripts/onboard-admin-user.js to create users and assign the admin role via Keycloak's Admin REST API — not used by the dashboard itself. Regenerate this client's secret in Keycloak's admin console before using outside local testing; never reuse the value shipped in this file."
     }
   ],
   "roles": {
@@ -23,6 +34,14 @@
     ]
   },
   "users": [
+    {
+      "username": "service-account-shift-board-admin-api",
+      "enabled": true,
+      "serviceAccountClientId": "shift-board-admin-api",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users"]
+      }
+    },
     {
       "username": "testuser",
       "enabled": true,
