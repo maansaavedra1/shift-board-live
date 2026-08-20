@@ -487,9 +487,14 @@
   }
 
   document.getElementById('loginBtn').addEventListener('click', function () {
+    if (!keycloak) {
+      showError('Keycloak has not finished loading (its config could not be fetched from /config.json). Check the backend is running and reachable, then reload this page and try again.');
+      return;
+    }
     keycloak.login();
   });
   document.getElementById('logoutBtn').addEventListener('click', function () {
+    if (!keycloak) return; // logout button is only ever visible once keycloak exists, but guard anyway
     keycloak.logout({ redirectUri: window.location.origin + window.location.pathname });
   });
 
