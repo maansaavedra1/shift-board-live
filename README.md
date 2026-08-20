@@ -23,6 +23,7 @@ This is a containerized version of the Shift Board backend, secured with Keycloa
 - ✅ Two test accounts are included: `testuser` / `testpassword` (has the `admin` role — should see the dashboard) and `testuser-noaccess` / `testpassword` (logged in, no role — should get a clear "you don't have access yet" message). Use the second one to confirm the restriction actually works, not just the happy path.
 - ✅ **To onboard someone for real:** in Keycloak's admin console, create their user account, *then* go to that user → **Role mapping → Assign role → `admin`**. Creating the account alone does not grant access — this second step is what does.
 - ✅ **Or, onboard via API instead of clicking through the console:** `scripts/onboard-admin-user.js` calls Keycloak's Admin REST API to create the user, set a temporary password, and assign the `admin` role in one step. See "Onboarding users via API" below.
+- ✅ **Or, onboard right from the dashboard itself.** There's now a "manage users" link in the dashboard's toolbar — opens a panel to add a new user (username/email/name) and see existing users, without touching Keycloak's console or a terminal at all. This calls the same underlying logic as the CLI script (`src/keycloak-admin.js`), just exposed as `/api/admin/users` behind the same admin-role gate as the rest of the dashboard.
 - ✅ The role name is configurable via the `REQUIRED_ROLE` environment variable (defaults to `admin`) — set it to an empty string to temporarily disable the role check (any logged-in user allowed) while testing, but this is not recommended once real users are onboarded.
 - ⚠️ Still not built: any distinction *within* the dashboard (e.g., some users seeing more than others). Today it's binary — either you have the `admin` role and see everything, or you don't and see nothing. Extend `keycloak-auth.js`'s `hasRequiredRole()` check if that's ever needed.
 
@@ -61,6 +62,16 @@ This prints a temporary password (or pass one explicitly as a 5th argument) — 
 
 This has been written carefully against Keycloak's documented Admin REST API, but — consistent with everything else in this README — **has not yet been run against a real Keycloak instance in this session.** Test it against a non-production realm first.
 
+### Same thing, but from the dashboard itself
+
+Once the server has `KEYCLOAK_ADMIN_CLIENT_SECRET` set (the one-time setup above), a **"manage users"** link appears in the dashboard's toolbar. Clicking it opens a panel to:
+- Add a new user (username, email, first/last name) — creates the account, generates a temporary password, and assigns the admin role, same as the CLI script
+- See a list of existing Keycloak users
+
+No extra login or separate tool needed — since viewing the dashboard already requires the admin role, anyone who's in is already trusted to manage other users. The actual permission check happens server-side (`/api/admin/users` uses the same `requireAuth` middleware as everything else), not just by hiding the button.
+
+If `KEYCLOAK_ADMIN_CLIENT_SECRET` isn't set, the panel will show a clear "not configured" message instead of a broken form — this is meant to degrade gracefully on deployments that haven't set up the admin API yet.
+
 ## Multiple clients / multi-tenancy
 
 If this needs to serve more than one client company, each fully isolated
@@ -94,12 +105,13 @@ shift-board-docker/
 ├── keycloak/
 │   └── shift-board-realm.json  (Keycloak realm/client/test-user import file)
 ├── scripts/
-│   ├── onboard-admin-user.js    (creates users + assigns admin role via Keycloak's Admin API)
+│   ├── onboard-admin-user.js    (CLI: creates users + assigns admin role via Keycloak's Admin API)
 │   └── generate-tenant-realm.js (generates an isolated realm file for a new client — see MULTI_TENANT_DEPLOYMENT.md)
 ├── public/
-│   └── index.html           (dashboard — now with Keycloak login wired in)
+│   └── index.html           (dashboard — Keycloak login + in-app "manage users" panel)
 └── src/
     ├── server.js            (Express app, routes, serves the dashboard + API)
-    ├── keycloak-auth.js     (JWT verification middleware)
+    ├── keycloak-auth.js     (JWT verification + role-check middleware)
+    ├── keycloak-admin.js    (shared Keycloak Admin API client — used by the CLI script and /api/admin/users)
     └── sprout.js            (Sprout HR integration — same logic as the Azure port)
 ```

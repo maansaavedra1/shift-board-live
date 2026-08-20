@@ -132,6 +132,17 @@ Before production, edit the `shift-board-app` client in Keycloak's admin
 console and lock these down to your actual Shift Board URL (from Step 6),
 e.g. `https://shiftboard.<random>.azurecontainerapps.io/*`.
 
+**Regenerate the admin-api client's secret.** The realm file also creates
+a second, confidential client called `shift-board-admin-api` — this is
+what powers both `scripts/onboard-admin-user.js` and the dashboard's
+in-app "manage users" panel. It ships with a placeholder secret
+(`CHANGE_ME_LOCAL_TESTING_ONLY`) that's sitting in this repo, so it must
+never be used as-is beyond local testing:
+
+1. Keycloak admin console → **Clients** → `shift-board-admin-api` → **Credentials** tab
+2. Click **Regenerate secret**
+3. Copy the new value — you'll need it in Step 5 below
+
 ## Step 5 — Deploy the Shift Board backend+frontend
 
 ```bash
@@ -147,6 +158,7 @@ az containerapp create \
   --secrets \
     sprout-client-secret="<real value>" \
     sprout-subscription-key="<real value>" \
+    keycloak-admin-client-secret="<the secret you just regenerated>" \
   --env-vars \
     SPROUT_BASE=https://gateway-sb.sprout.ph \
     SPROUT_CLIENT_ID="<real value>" \
@@ -155,8 +167,16 @@ az containerapp create \
     SPROUT_USER_ID="<real value>" \
     KEYCLOAK_URL="https://keycloak.<random>.azurecontainerapps.io" \
     KEYCLOAK_REALM=shift-board \
-    KEYCLOAK_CLIENT_ID=shift-board-app
+    KEYCLOAK_CLIENT_ID=shift-board-app \
+    KEYCLOAK_ADMIN_CLIENT_ID=shift-board-admin-api \
+    KEYCLOAK_ADMIN_CLIENT_SECRET=secretref:keycloak-admin-client-secret
 ```
+
+`KEYCLOAK_ADMIN_CLIENT_ID` / `KEYCLOAK_ADMIN_CLIENT_SECRET` are what let the
+dashboard's "manage users" panel (and the CLI script) call Keycloak's
+Admin API. If these are left unset, the panel won't crash — it shows a
+clear "not configured" message instead — but nobody will be able to add
+users through the app until they're set.
 
 Azure's built-in health probes will hit `/` by default; you can point the
 liveness probe at `/health` explicitly in the Azure Portal under the
@@ -216,3 +236,11 @@ end-to-end outside this session:
 - [ ] Logging in as `testuser-noaccess` (correct login, no `admin` role)
       gets a clear 403 message on the dashboard instead of either silently
       failing or being let through
+- [ ] Clicking "manage users" in the dashboard toolbar opens the panel and
+      successfully lists existing Keycloak users (confirms
+      `KEYCLOAK_ADMIN_CLIENT_SECRET` is set and correct)
+- [ ] Adding a user through that panel actually creates them in Keycloak
+      (verify in Keycloak's own admin console, not just the app's success
+      message) — and confirm they land in the `admin` role automatically
+- [ ] The newly added user can log in with the temporary password shown
+      and is prompted to set their own on first login

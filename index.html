@@ -314,9 +314,15 @@
   </div>
 
   <div class="setup-box" id="setupBox">
-    <div class="label">One-time setup: paste your Apps Script Web App URL</div>
-    <input type="text" id="scriptUrlInput" placeholder="https://script.google.com/macros/s/XXXXXXXX/exec">
+    <div class="label">One-time setup: paste your Shift Board API URL</div>
+    <input type="text" id="scriptUrlInput" placeholder="https://your-backend-host/api/shift-board">
     <button id="saveUrlBtn">Save &amp; Connect</button>
+  </div>
+
+  <div class="setup-box" id="loginBox" style="display:none;">
+    <div class="label" id="loginLabel">Sign in required to view Shift Board</div>
+    <button id="loginBtn">Sign in with Keycloak</button>
+    <button id="logoutBtn" style="display:none;">Sign out</button>
   </div>
 
   <div class="banner error" id="errorBanner"></div>
@@ -328,6 +334,22 @@
     <span class="status-text" id="lastUpdated">Not connected yet</span>
     <span class="settings-link" id="settingsLink">change URL</span>
     <span class="settings-link" id="resetSectionsLink">reset section view</span>
+    <span class="settings-link" id="manageUsersLink">manage users</span>
+  </div>
+
+  <div class="setup-box" id="adminPanel" style="display:none;">
+    <div class="label">Add a dashboard user</div>
+    <div id="adminPanelError" class="banner error" style="display:none;"></div>
+    <div id="adminPanelSuccess" class="banner info" style="display:none;"></div>
+
+    <input type="text" id="newUserUsername" placeholder="Username (e.g. jdelacruz)">
+    <input type="email" id="newUserEmail" placeholder="Email">
+    <input type="text" id="newUserFirstName" placeholder="First name">
+    <input type="text" id="newUserLastName" placeholder="Last name">
+    <button id="addUserBtn">Add User</button>
+
+    <div class="label" style="margin-top: 20px;">Existing users</div>
+    <div id="existingUsersList" style="font-size: 13px; opacity: 0.85;">Loading...</div>
   </div>
 
   <div class="control-bar" id="rangeBar">
@@ -391,7 +413,107 @@
 
 <div id="sharedTooltip"></div>
 
+<!-- Keycloak JS adapter (standalone UMD build). Pin the version to match
+     your Keycloak server's major version where possible. -->
+<script src="https://cdn.jsdelivr.net/npm/keycloak-js@25.0.0/dist/keycloak.js"></script>
+
 <script>
+  // ---------------------------------------------------------------------
+  // KEYCLOAK CONFIG — fetched from the backend's /config.json at runtime,
+  // which reads it from environment variables (KEYCLOAK_URL,
+  // KEYCLOAK_REALM, KEYCLOAK_CLIENT_ID). This means the same built image
+  // can move between environments (local Docker, staging, Azure) just by
+  // changing env vars on the container — no code edit or rebuild needed.
+  // None of these values are secrets: this is a public Keycloak client,
+  // so the browser has to know them to start the login flow.
+  // ---------------------------------------------------------------------
+  var keycloak = null;
+  var keycloakReady = false;
+
+  function loadKeycloakConfig() {
+    return fetch('/config.json').then(function (res) {
+      if (!res.ok) throw new Error('config.json returned ' + res.status);
+      return res.json();
+    }).then(function (config) {
+      if (!config.keycloakUrl || !config.keycloakRealm) {
+        throw new Error('KEYCLOAK_URL / KEYCLOAK_REALM are not set on the server. Set these environment variables and restart the backend.');
+      }
+      keycloak = new Keycloak({
+        url: config.keycloakUrl,
+        realm: config.keycloakRealm,
+        clientId: config.keycloakClientId
+      });
+      return config;
+    });
+  }
+
+  // Kicks off login (redirects to Keycloak's login page) if the user
+  // isn't already authenticated. 'check-sso' (rather than
+  // 'login-required') lets the page render before redirecting, so we can
+  // show a clear "Sign in" button instead of an instant, unexplained
+  // redirect on first load.
+  function initKeycloak() {
+    return loadKeycloakConfig().then(function () {
+      return keycloak.init({
+        onLoad: 'check-sso',
+        pkceMethod: 'S256',
+        silentCheckSsoRedirectUri: window.location.origin + window.location.pathname
+      });
+    }).then(function (authenticated) {
+      keycloakReady = true;
+      updateAuthUI(authenticated);
+      return authenticated;
+    }).catch(function (err) {
+      keycloakReady = true;
+      showError('Could not set up Keycloak login. Check /config.json is reachable and KEYCLOAK_URL/KEYCLOAK_REALM are set on the server. (' + (err && err.message ? err.message : err) + ')');
+      updateAuthUI(false);
+      return false;
+    });
+  }
+
+  function updateAuthUI(authenticated) {
+    document.getElementById('loginBox').style.display = authenticated ? 'none' : 'block';
+    document.getElementById('loginBtn').style.display = authenticated ? 'none' : 'inline-block';
+    document.getElementById('logoutBtn').style.display = authenticated ? 'inline-block' : 'none';
+    if (authenticated) {
+      var savedUrl = getSavedUrl();
+      if (savedUrl) {
+        document.getElementById('scriptUrlInput').value = savedUrl;
+        fetchReport();
+      } else {
+        showSetup(true);
+      }
+    } else {
+      showSetup(false);
+    }
+  }
+
+  // Ensures the access token is valid (refreshing if it's within 30s of
+  // expiry) and returns it. Every API call should go through this instead
+  // of reading keycloak.token directly, since tokens are short-lived.
+  function getFreshToken() {
+    return keycloak.updateToken(30).catch(function () {
+      // Refresh token itself expired or is invalid — force a fresh login
+      // rather than silently sending stale/no auth.
+      keycloak.login();
+      return Promise.reject(new Error('Session expired — redirecting to sign-in.'));
+    }).then(function () {
+      return keycloak.token;
+    });
+  }
+
+  document.getElementById('loginBtn').addEventListener('click', function () {
+    if (!keycloak) {
+      showError('Keycloak has not finished loading (its config could not be fetched from /config.json). Check the backend is running and reachable, then reload this page and try again.');
+      return;
+    }
+    keycloak.login();
+  });
+  document.getElementById('logoutBtn').addEventListener('click', function () {
+    if (!keycloak) return; // logout button is only ever visible once keycloak exists, but guard anyway
+    keycloak.logout({ redirectUri: window.location.origin + window.location.pathname });
+  });
+
   var STATUS_ORDER = ['late', 'presentButLate', 'didNotReport', 'onTime', 'onLeave', 'restDay'];
   var STATUS_META = {
     late:            { label: 'Late (Shift Ongoing)', description: 'No log-in or log-out recorded yet, and their shift hasn\'t ended — still time for them to show up.' },
@@ -556,6 +678,116 @@
   function hideInfo() {
     document.getElementById('infoBanner').classList.remove('visible');
   }
+
+  // --- Admin panel: add users / list users via the in-app API ---
+  // Uses the same requireAuth-protected endpoints as everything else —
+  // no separate permission model, since only admins can reach this
+  // dashboard at all under the current REQUIRED_ROLE gate.
+
+  var adminPanelOpen = false;
+
+  document.getElementById('manageUsersLink').addEventListener('click', function () {
+    adminPanelOpen = !adminPanelOpen;
+    document.getElementById('adminPanel').style.display = adminPanelOpen ? 'block' : 'none';
+    if (adminPanelOpen) loadExistingUsers();
+  });
+
+  function adminPanelError(msg) {
+    var el = document.getElementById('adminPanelError');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('adminPanelSuccess').style.display = 'none';
+  }
+  function adminPanelSuccess(msg) {
+    var el = document.getElementById('adminPanelSuccess');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('adminPanelError').style.display = 'none';
+  }
+  function adminPanelClearBanners() {
+    document.getElementById('adminPanelError').style.display = 'none';
+    document.getElementById('adminPanelSuccess').style.display = 'none';
+  }
+
+  function loadExistingUsers() {
+    var listEl = document.getElementById('existingUsersList');
+    listEl.textContent = 'Loading...';
+    getFreshToken().then(function (token) {
+      return fetch('/api/admin/users', { headers: { 'Authorization': 'Bearer ' + token } });
+    }).then(function (res) {
+      return res.json().then(function (body) { return { res: res, body: body }; });
+    }).then(function (result) {
+      if (!result.res.ok || !result.body.ok) {
+        listEl.textContent = result.body.error || 'Could not load users.';
+        return;
+      }
+      if (result.body.users.length === 0) {
+        listEl.textContent = 'No users found.';
+        return;
+      }
+      listEl.innerHTML = '';
+      result.body.users.forEach(function (u) {
+        var row = document.createElement('div');
+        row.style.padding = '4px 0';
+        // textContent (not innerHTML) for all user-supplied fields — these
+        // come from Keycloak's stored user records, not hardcoded strings,
+        // so they're treated as untrusted display data.
+        row.textContent = u.username + ' — ' + u.firstName + ' ' + u.lastName + ' (' + u.email + ')' + (u.enabled ? '' : ' [disabled]');
+        listEl.appendChild(row);
+      });
+    }).catch(function (err) {
+      listEl.textContent = 'Could not load users: ' + err.message;
+    });
+  }
+
+  document.getElementById('addUserBtn').addEventListener('click', function () {
+    adminPanelClearBanners();
+    var username = document.getElementById('newUserUsername').value.trim();
+    var email = document.getElementById('newUserEmail').value.trim();
+    var firstName = document.getElementById('newUserFirstName').value.trim();
+    var lastName = document.getElementById('newUserLastName').value.trim();
+
+    if (!username || !email || !firstName || !lastName) {
+      adminPanelError('All fields are required.');
+      return;
+    }
+
+    var btn = document.getElementById('addUserBtn');
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+
+    getFreshToken().then(function (token) {
+      return fetch('/api/admin/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        body: JSON.stringify({ username: username, email: email, firstName: firstName, lastName: lastName })
+      });
+    }).then(function (res) {
+      return res.json().then(function (body) { return { res: res, body: body }; });
+    }).then(function (result) {
+      if (!result.res.ok || !result.body.ok) {
+        adminPanelError(result.body.error || 'Could not add user.');
+        return;
+      }
+      adminPanelSuccess(
+        'Added "' + result.body.username + '". Temporary password: ' + result.body.temporaryPassword +
+        ' — share this with them through a secure channel (not email/chat in plain text). They\'ll be asked to set their own password on first login.'
+      );
+      document.getElementById('newUserUsername').value = '';
+      document.getElementById('newUserEmail').value = '';
+      document.getElementById('newUserFirstName').value = '';
+      document.getElementById('newUserLastName').value = '';
+      loadExistingUsers();
+    }).catch(function (err) {
+      adminPanelError('Could not add user: ' + err.message);
+    }).finally(function () {
+      btn.disabled = false;
+      btn.textContent = 'Add User';
+    });
+  });
 
   function detailFor(status, e) {
     if (status === 'presentButLate') {
@@ -772,7 +1004,19 @@
       requestUrl += (url.indexOf('?') === -1 ? '?' : '&') + 'days=' + selectedDays;
     }
 
-    fetch(requestUrl).then(function (response) {
+    getFreshToken().then(function (token) {
+      return fetch(requestUrl, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+    }).then(function (response) {
+      if (response.status === 401) {
+        throw new Error('Not authorized (401) — your session may have expired. Try signing in again.');
+      }
+      if (response.status === 403) {
+        return response.json().then(function (body) {
+          throw new Error(body.error || "You're signed in, but don't have access to this dashboard yet. Ask an admin to grant you access in Keycloak.");
+        });
+      }
       return response.json();
     }).then(function (data) {
       setLoadingState(false);
@@ -832,7 +1076,13 @@
       applyEmployeeFilter();
     }).catch(function (err) {
       setLoadingState(false);
-      showError('Could not reach your Apps Script URL. Check the URL is correct and deployed with "Anyone" access. (' + err.message + ')');
+      // TypeError here means fetch() itself failed (bad URL, network issue,
+      // CORS) — the other error types below all come from explicit throws
+      // above with a message already tailored to what happened.
+      var msg = (err instanceof TypeError)
+        ? 'Could not reach the Shift Board API at the configured URL. Check the URL is correct and the backend is running. (' + err.message + ')'
+        : err.message;
+      showError(msg);
       document.getElementById('lastUpdated').textContent = 'Failed to load';
     });
   }
@@ -893,13 +1143,11 @@
     if (savedCollapsed) collapsedState = JSON.parse(savedCollapsed);
   } catch (e) {}
 
-  var savedUrl = getSavedUrl();
-  if (savedUrl) {
-    document.getElementById('scriptUrlInput').value = savedUrl;
-    fetchReport();
-  } else {
-    showSetup(true);
-  }
+  // Auth gate: don't touch the API URL / setup flow until we know whether
+  // the user is logged in. updateAuthUI() (called from initKeycloak's
+  // resolution) takes over from here — it shows the login box, or loads
+  // the saved API URL and fetches, depending on auth state.
+  initKeycloak();
 </script>
 
 </body>

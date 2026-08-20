@@ -334,6 +334,22 @@
     <span class="status-text" id="lastUpdated">Not connected yet</span>
     <span class="settings-link" id="settingsLink">change URL</span>
     <span class="settings-link" id="resetSectionsLink">reset section view</span>
+    <span class="settings-link" id="manageUsersLink">manage users</span>
+  </div>
+
+  <div class="setup-box" id="adminPanel" style="display:none;">
+    <div class="label">Add a dashboard user</div>
+    <div id="adminPanelError" class="banner error" style="display:none;"></div>
+    <div id="adminPanelSuccess" class="banner info" style="display:none;"></div>
+
+    <input type="text" id="newUserUsername" placeholder="Username (e.g. jdelacruz)">
+    <input type="email" id="newUserEmail" placeholder="Email">
+    <input type="text" id="newUserFirstName" placeholder="First name">
+    <input type="text" id="newUserLastName" placeholder="Last name">
+    <button id="addUserBtn">Add User</button>
+
+    <div class="label" style="margin-top: 20px;">Existing users</div>
+    <div id="existingUsersList" style="font-size: 13px; opacity: 0.85;">Loading...</div>
   </div>
 
   <div class="control-bar" id="rangeBar">
@@ -662,6 +678,116 @@
   function hideInfo() {
     document.getElementById('infoBanner').classList.remove('visible');
   }
+
+  // --- Admin panel: add users / list users via the in-app API ---
+  // Uses the same requireAuth-protected endpoints as everything else —
+  // no separate permission model, since only admins can reach this
+  // dashboard at all under the current REQUIRED_ROLE gate.
+
+  var adminPanelOpen = false;
+
+  document.getElementById('manageUsersLink').addEventListener('click', function () {
+    adminPanelOpen = !adminPanelOpen;
+    document.getElementById('adminPanel').style.display = adminPanelOpen ? 'block' : 'none';
+    if (adminPanelOpen) loadExistingUsers();
+  });
+
+  function adminPanelError(msg) {
+    var el = document.getElementById('adminPanelError');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('adminPanelSuccess').style.display = 'none';
+  }
+  function adminPanelSuccess(msg) {
+    var el = document.getElementById('adminPanelSuccess');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('adminPanelError').style.display = 'none';
+  }
+  function adminPanelClearBanners() {
+    document.getElementById('adminPanelError').style.display = 'none';
+    document.getElementById('adminPanelSuccess').style.display = 'none';
+  }
+
+  function loadExistingUsers() {
+    var listEl = document.getElementById('existingUsersList');
+    listEl.textContent = 'Loading...';
+    getFreshToken().then(function (token) {
+      return fetch('/api/admin/users', { headers: { 'Authorization': 'Bearer ' + token } });
+    }).then(function (res) {
+      return res.json().then(function (body) { return { res: res, body: body }; });
+    }).then(function (result) {
+      if (!result.res.ok || !result.body.ok) {
+        listEl.textContent = result.body.error || 'Could not load users.';
+        return;
+      }
+      if (result.body.users.length === 0) {
+        listEl.textContent = 'No users found.';
+        return;
+      }
+      listEl.innerHTML = '';
+      result.body.users.forEach(function (u) {
+        var row = document.createElement('div');
+        row.style.padding = '4px 0';
+        // textContent (not innerHTML) for all user-supplied fields — these
+        // come from Keycloak's stored user records, not hardcoded strings,
+        // so they're treated as untrusted display data.
+        row.textContent = u.username + ' — ' + u.firstName + ' ' + u.lastName + ' (' + u.email + ')' + (u.enabled ? '' : ' [disabled]');
+        listEl.appendChild(row);
+      });
+    }).catch(function (err) {
+      listEl.textContent = 'Could not load users: ' + err.message;
+    });
+  }
+
+  document.getElementById('addUserBtn').addEventListener('click', function () {
+    adminPanelClearBanners();
+    var username = document.getElementById('newUserUsername').value.trim();
+    var email = document.getElementById('newUserEmail').value.trim();
+    var firstName = document.getElementById('newUserFirstName').value.trim();
+    var lastName = document.getElementById('newUserLastName').value.trim();
+
+    if (!username || !email || !firstName || !lastName) {
+      adminPanelError('All fields are required.');
+      return;
+    }
+
+    var btn = document.getElementById('addUserBtn');
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+
+    getFreshToken().then(function (token) {
+      return fetch('/api/admin/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        body: JSON.stringify({ username: username, email: email, firstName: firstName, lastName: lastName })
+      });
+    }).then(function (res) {
+      return res.json().then(function (body) { return { res: res, body: body }; });
+    }).then(function (result) {
+      if (!result.res.ok || !result.body.ok) {
+        adminPanelError(result.body.error || 'Could not add user.');
+        return;
+      }
+      adminPanelSuccess(
+        'Added "' + result.body.username + '". Temporary password: ' + result.body.temporaryPassword +
+        ' — share this with them through a secure channel (not email/chat in plain text). They\'ll be asked to set their own password on first login.'
+      );
+      document.getElementById('newUserUsername').value = '';
+      document.getElementById('newUserEmail').value = '';
+      document.getElementById('newUserFirstName').value = '';
+      document.getElementById('newUserLastName').value = '';
+      loadExistingUsers();
+    }).catch(function (err) {
+      adminPanelError('Could not add user: ' + err.message);
+    }).finally(function () {
+      btn.disabled = false;
+      btn.textContent = 'Add User';
+    });
+  });
 
   function detailFor(status, e) {
     if (status === 'presentButLate') {
