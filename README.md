@@ -22,6 +22,7 @@ This is a containerized version of the Shift Board backend, secured with Keycloa
 - ✅ There is now a real `admin` realm role in `keycloak/shift-board-realm.json`. Being logged into Keycloak is no longer enough on its own — `keycloak-auth.js` checks the token for this role and returns 403 if it's missing, even for a valid, successfully-logged-in user.
 - ✅ Two test accounts are included: `testuser` / `testpassword` (has the `admin` role — should see the dashboard) and `testuser-noaccess` / `testpassword` (logged in, no role — should get a clear "you don't have access yet" message). Use the second one to confirm the restriction actually works, not just the happy path.
 - ✅ **To onboard someone for real:** in Keycloak's admin console, create their user account, *then* go to that user → **Role mapping → Assign role → `admin`**. Creating the account alone does not grant access — this second step is what does.
+- ✅ **Or, onboard via API instead of clicking through the console:** `scripts/onboard-admin-user.js` calls Keycloak's Admin REST API to create the user, set a temporary password, and assign the `admin` role in one step. See "Onboarding users via API" below.
 - ✅ The role name is configurable via the `REQUIRED_ROLE` environment variable (defaults to `admin`) — set it to an empty string to temporarily disable the role check (any logged-in user allowed) while testing, but this is not recommended once real users are onboarded.
 - ⚠️ Still not built: any distinction *within* the dashboard (e.g., some users seeing more than others). Today it's binary — either you have the `admin` role and see everything, or you don't and see nothing. Extend `keycloak-auth.js`'s `hasRequiredRole()` check if that's ever needed.
 
@@ -42,6 +43,34 @@ This is a containerized version of the Shift Board backend, secured with Keycloa
    ```
    curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3000/api/shift-board
    ```
+
+## Onboarding users via API
+
+Instead of manually creating each user in Keycloak's admin console, `scripts/onboard-admin-user.js` does it via Keycloak's Admin REST API — creates the account, sets a temporary password, and assigns the `admin` role, all in one run.
+
+**One-time setup** (only needed once per Keycloak instance):
+1. If you imported `shift-board-realm.json` as-is, a confidential client called `shift-board-admin-api` already exists with the right permissions (`manage-users`, `view-users`) via its service account.
+2. **Before using this for anything beyond local testing**, regenerate that client's secret: Keycloak admin console → Clients → `shift-board-admin-api` → Credentials tab → Regenerate. The secret shipped in `shift-board-realm.json` is public (it's sitting in this repo) — never use it as-is.
+3. Put that secret in your `.env` as `KEYCLOAK_ADMIN_CLIENT_SECRET`.
+
+**Usage:**
+```bash
+npm run onboard-admin -- jdelacruz jdelacruz@sprout.ph Juan "Dela Cruz"
+```
+This prints a temporary password (or pass one explicitly as a 5th argument) — share it with the person through a secure channel. They'll be required to change it on first login.
+
+This has been written carefully against Keycloak's documented Admin REST API, but — consistent with everything else in this README — **has not yet been run against a real Keycloak instance in this session.** Test it against a non-production realm first.
+
+## Multiple clients / multi-tenancy
+
+If this needs to serve more than one client company, each fully isolated
+(separate login, separate URL, separate data) — see `MULTI_TENANT_DEPLOYMENT.md`.
+Short version: no new code is needed, since every client-specific value
+already comes from environment variables. It's a deployment pattern (run
+the same image once per client, with different config), not a new
+feature. That guide also includes `scripts/generate-tenant-realm.js`,
+which generates a new client's isolated Keycloak realm file (with its own
+unique secret) instead of hand-editing JSON per client.
 
 ## Moving to a Real Deployment
 
@@ -64,6 +93,9 @@ shift-board-docker/
 ├── package.json
 ├── keycloak/
 │   └── shift-board-realm.json  (Keycloak realm/client/test-user import file)
+├── scripts/
+│   ├── onboard-admin-user.js    (creates users + assigns admin role via Keycloak's Admin API)
+│   └── generate-tenant-realm.js (generates an isolated realm file for a new client — see MULTI_TENANT_DEPLOYMENT.md)
 ├── public/
 │   └── index.html           (dashboard — now with Keycloak login wired in)
 └── src/
